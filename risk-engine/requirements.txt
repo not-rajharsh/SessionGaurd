@@ -1,0 +1,8 @@
+# Runtime
+fastapi==0.162.0
+uvicorn==0.54.0
+redis==8.1.0
+python-dotenv==1.2.4
+# Test only
+pytest==9.1.1
+httpx==0.28.1

@@ -1,0 +1,26 @@
+{
+  "name": "session-guard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Session-hijacking defense: demo app, risk engine, attack demo (Phase 1: core detection)",
+  "scripts": {
+    "setup": "python3 -m venv risk-engine/.venv && risk-engine/.venv/bin/pip install -r risk-engine/requirements.txt && npm install && npx playwright install chromium",
+    "app": "node demo-app/server.js",
+    "engine": "node scripts/engine.js",
+    "attack": "node attack/attack.js",
+    "demo": "node scripts/demo.js",
+    "test": "npm run test:py && npm run test:js",
+    "test:js": "node --test \"demo-app/test/*.test.js\"",
+    "test:py": "cd risk-engine && .venv/bin/python -m pytest -q"
+  },
+  "engines": {
+    "node": ">=20.12"
+  },
+  "dependencies": {
+    "connect-redis": "7.1.1",
+    "express": "4.21.2",
+    "express-session": "1.18.1",
+    "playwright": "1.64.1",
+    "redis": "4.7.0"
+  }
+}
