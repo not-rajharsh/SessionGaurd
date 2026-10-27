@@ -1,7 +1,9 @@
-"""events: append-only SQLite log of every evaluation (and terminate alerts).
+"""events: append-only SQLite log of every evaluation, plus the rationale.
 
-One short-lived connection per call keeps it safe under FastAPI's threadpool.
-The dashboard (later phase) will read from this table.
+One short-lived connection per call keeps it safe under FastAPI's threadpool and
+background tasks. `session_id` holds a short HASH of the real session id
+(session_ref), never the bearer token itself. The rationale is written later,
+asynchronously, by set_rationale(). Older databases are migrated in place.
 """
 from __future__ import annotations
 
@@ -22,8 +24,16 @@ CREATE TABLE IF NOT EXISTS events (
   fingerprint_hash TEXT NOT NULL,
   score INTEGER NOT NULL,
   action TEXT NOT NULL,
-  signals TEXT NOT NULL
+  signals TEXT NOT NULL,
+  route TEXT NOT NULL DEFAULT '',
+  rationale TEXT,
+  rationale_source TEXT
 )"""
+_MIGRATIONS = {
+    "route": "ALTER TABLE events ADD COLUMN route TEXT NOT NULL DEFAULT ''",
+    "rationale": "ALTER TABLE events ADD COLUMN rationale TEXT",
+    "rationale_source": "ALTER TABLE events ADD COLUMN rationale_source TEXT",
+}
 
 
 class EventLog:
@@ -33,6 +43,10 @@ class EventLog:
         with self._conn() as c:
             c.execute("PRAGMA journal_mode=WAL")
             c.execute(_SCHEMA)
+            have = {r["name"] for r in c.execute("PRAGMA table_info(events)")}
+            for col, ddl in _MIGRATIONS.items():
+                if col not in have:
+                    c.execute(ddl)
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path, timeout=5)
@@ -40,16 +54,46 @@ class EventLog:
         return conn
 
     def record(self, *, session_id, ip, user_agent, fingerprint_hash, score, action,
-               signals: list[Signal]) -> None:
+               signals: list[Signal], route: str = "", ts: float | None = None) -> int:
         with self._conn() as c:
-            c.execute(
+            cur = c.execute(
                 "INSERT INTO events (ts, session_id, ip, user_agent, fingerprint_hash,"
-                " score, action, signals) VALUES (?,?,?,?,?,?,?,?)",
-                (time.time(), session_id, ip, user_agent, fingerprint_hash, score, action,
-                 json.dumps([s.to_dict() for s in signals])),
+                " score, action, signals, route) VALUES (?,?,?,?,?,?,?,?,?)",
+                (ts if ts is not None else time.time(), session_id, ip, user_agent,
+                 fingerprint_hash, score, action,
+                 json.dumps([s.to_dict() for s in signals]), route),
             )
+            return int(cur.lastrowid)
+
+    def set_rationale(self, event_id: int, text: str, source: str) -> None:
+        with self._conn() as c:
+            c.execute("UPDATE events SET rationale=?, rationale_source=? WHERE id=?",
+                      (text, source, event_id))
+
+    def get(self, event_id: int) -> dict | None:
+        with self._conn() as c:
+            r = c.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone()
+        return {**dict(r), "signals": json.loads(r["signals"])} if r else None
 
     def recent(self, limit: int = 50) -> list[dict]:
         with self._conn() as c:
             rows = c.execute("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [{**dict(r), "signals": json.loads(r["signals"])} for r in rows]
+
+    # --- dashboard queries ------------------------------------------------------------
+    def sessions(self, limit: int = 50) -> list[dict]:
+        sql = """
+        SELECT session_id AS ref, MIN(ts) AS first_ts, MAX(ts) AS last_ts, COUNT(*) AS events,
+               MAX(score) AS max_score,
+               MAX(CASE WHEN action='terminate' THEN 1 ELSE 0 END) AS terminated,
+               (SELECT e2.score  FROM events e2 WHERE e2.session_id=e.session_id ORDER BY e2.id DESC LIMIT 1) AS last_score,
+               (SELECT e2.action FROM events e2 WHERE e2.session_id=e.session_id ORDER BY e2.id DESC LIMIT 1) AS last_action
+        FROM events e GROUP BY session_id ORDER BY last_ts DESC LIMIT ?"""
+        with self._conn() as c:
+            return [dict(r) for r in c.execute(sql, (limit,)).fetchall()]
+
+    def session_events(self, ref: str, limit: int = 500) -> list[dict]:
+        with self._conn() as c:
+            rows = c.execute("SELECT * FROM events WHERE session_id=? ORDER BY id ASC LIMIT ?",
+                             (ref, limit)).fetchall()
         return [{**dict(r), "signals": json.loads(r["signals"])} for r in rows]

@@ -26,6 +26,18 @@ class Settings:
     max_travel_kmh: float
     min_travel_km: float
     geo_path: str
+    # layer 2 (device-bound proof)
+    proof_max_age: float = 30.0        # presence proof must be this fresh for reads
+    nonce_ttl: float = 30.0            # single-use challenge lifetime
+    # passkey step-up
+    elevated_seconds: float = 300.0    # trust window after a passed step-up
+    stepup_timeout: float = 60.0       # challenge not satisfied in time -> terminate
+    # LLM explanations (optional; the system works with provider "none")
+    llm_provider: str = "none"         # none | openai (any OpenAI-compatible API) | anthropic
+    llm_base_url: str = ""
+    llm_model: str = ""
+    llm_api_key: str = ""
+    llm_timeout: float = 4.0
 
 
 def get_settings() -> Settings:
@@ -40,4 +52,13 @@ def get_settings() -> Settings:
         geo_path=os.environ.get(
             "GEO_DB_PATH", str(Path(__file__).parent / "data" / "geo_demo.json")
         ),
+        proof_max_age=float(os.environ.get("PROOF_MAX_AGE_SECONDS", "30")),
+        nonce_ttl=float(os.environ.get("NONCE_TTL_SECONDS", "30")),
+        elevated_seconds=float(os.environ.get("ELEVATED_SECONDS", "300")),
+        stepup_timeout=float(os.environ.get("STEPUP_TIMEOUT_SECONDS", "60")),
+        llm_provider=os.environ.get("LLM_PROVIDER", "none").strip().lower(),
+        llm_base_url=os.environ.get("LLM_BASE_URL", ""),
+        llm_model=os.environ.get("LLM_MODEL", ""),
+        llm_api_key=os.environ.get("LLM_API_KEY", ""),
+        llm_timeout=float(os.environ.get("LLM_TIMEOUT_SECONDS", "4")),
     )

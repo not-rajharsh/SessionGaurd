@@ -4,48 +4,71 @@
  * authenticated request and enforces the verdict.
  *
  *   const guard = createRiskGuard({ engineUrl, apiKey });
- *   app.use(session(...));      // must come first: needs req.session / req.sessionID
- *   app.use(guard.middleware);  // allow -> next(); challenge -> 403; terminate -> 401 + session destroyed
- *   // after login: await guard.evaluate(req)  // registers the session baseline
+ *   app.use(session(...));      // first: needs req.session / req.sessionID
+ *   app.use(guard.middleware);  // allow -> next(); challenge -> 403 (+ passkey step-up page for
+ *                               // browsers); terminate -> 401 + session destroyed
+ *   // login handler: await guard.evaluate(req) registers the session baseline
  *
- * Fails CLOSED (503) if the engine is unreachable or answers nonsense; set
- * failOpen:true only if availability matters more than protection.
- * Client IP comes from req.ip, so configure Express "trust proxy" correctly.
+ * Request kinds sent to the engine: "auth" (login/logout/challenge/presence/step-up plumbing,
+ * which must stay reachable), "write" (any non-GET: needs its own device proof) and "read".
+ * The client's device proof travels in `X-Device-Proof: <nonce>.<signature>`; the purpose it
+ * signed is derived HERE from the real request ("presence" or "<METHOD> <path>").
+ * Fails CLOSED (503) if the engine is unreachable; failOpen:true only if you accept the risk.
+ * Client IP comes from req.ip, so configure Express "trust proxy" (see trustProxy.js).
  */
 const crypto = require('node:crypto');
+const { createEngineClient } = require('./engineClient');
+const { stepupPage } = require('./views');
 
 const ACTIONS = new Set(['allow', 'challenge', 'terminate']);
+const AUTH_PATHS = new Set(['/login', '/logout', '/stepup']);
 
 const normalizeIp = (ip) => String(ip || '').replace(/^::ffff:/, '');
 
-// Phase 1 passive fingerprint: stable request headers only (User-Agent is a
-// separate signal). The client JS agent will supply a richer one later.
+// Phase 1 passive fingerprint: stable request headers only (User-Agent is a separate signal).
+// WEAK: anyone who has seen or copies these headers reproduces it, so the engine gives it a low weight.
 function fingerprint(req) {
   const parts = ['accept-language', 'accept-encoding', 'sec-ch-ua-platform'].map((h) => req.get(h) || '');
   return crypto.createHash('sha256').update(parts.join('|')).digest('hex');
 }
 
+function classify(req) {
+  const p = req.path || '/';
+  if (AUTH_PATHS.has(p) || p.startsWith('/auth/') || p.startsWith('/stepup/')) return 'auth';
+  return ['GET', 'HEAD', 'OPTIONS'].includes(req.method) ? 'read' : 'write';
+}
+
+function proofFields(req) {
+  const h = req.get('x-device-proof');
+  if (!h) return {};
+  const [nonce, signature] = h.slice(0, 400).split('.');
+  return {
+    proof_nonce: (nonce || '-').slice(0, 128),
+    proof_signature: (signature || '-').slice(0, 256),
+    proof_purpose: (req.path === '/auth/presence' ? 'presence' : `${req.method} ${req.path}`).slice(0, 256),
+  };
+}
+
+const wantsHtml = (req) => req.method === 'GET' && (req.get('accept') || '').includes('text/html');
+
 function createRiskGuard({
-  engineUrl, apiKey, timeoutMs = 1500, failOpen = false, exposeSignals = false,
+  engineUrl, apiKey, engine, timeoutMs = 1500, failOpen = false, exposeSignals = false,
   cookieName = 'sid', logger = console,
 }) {
-  if (!engineUrl || !apiKey) throw new Error('riskGuard: engineUrl and apiKey are required');
+  const client = engine || createEngineClient({ engineUrl, apiKey, timeoutMs });
+
+  const context = (req) => ({
+    session_id: req.sessionID,
+    ip: normalizeIp(req.ip),
+    user_agent: req.get('user-agent') || '',
+    fingerprint_hash: fingerprint(req),
+  });
 
   async function evaluate(req) {
-    const res = await fetch(`${engineUrl}/evaluate`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        session_id: req.sessionID,
-        ip: normalizeIp(req.ip),
-        user_agent: req.get('user-agent') || '',
-        fingerprint_hash: fingerprint(req),
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
+    const verdict = await client.evaluate({
+      ...context(req), kind: classify(req), route: `${req.method} ${req.path}`.slice(0, 300), ...proofFields(req),
     });
-    if (!res.ok) throw new Error(`engine returned HTTP ${res.status}`);
-    const verdict = await res.json();
-    if (!ACTIONS.has(verdict.action)) throw new Error(`engine returned unknown action ${verdict.action}`);
+    if (!verdict || !ACTIONS.has(verdict.action)) throw new Error(`engine returned unknown action ${verdict && verdict.action}`);
     return verdict;
   }
 
@@ -61,13 +84,15 @@ function createRiskGuard({
     req.risk = verdict;
     if (verdict.action === 'allow') return next();
 
+    const kind = classify(req);
     logger.warn(`[riskGuard] ${verdict.action.toUpperCase()} ${req.method} ${req.originalUrl} score=${verdict.score}`);
     const detail = exposeSignals ? { score: verdict.score, signals: verdict.signals } : {};
     if (verdict.action === 'challenge') {
+      if (kind === 'auth') return next(); // step-up and proof plumbing must stay reachable
+      if (wantsHtml(req)) return res.status(403).type('html').send(stepupPage());
       return res.status(403).json({
-        error: 'step_up_required',
-        message: 'Additional verification required (Passkey step-up arrives in a later phase).',
-        ...detail,
+        error: 'step_up_required', stepup_url: '/stepup',
+        message: 'Passkey step-up required. Complete it, then retry.', ...detail,
       });
     }
     return req.session.destroy(() => {
@@ -76,7 +101,7 @@ function createRiskGuard({
     });
   }
 
-  return { evaluate, middleware };
+  return { evaluate, middleware, context, engine: client };
 }
 
-module.exports = { createRiskGuard, fingerprint, normalizeIp };
+module.exports = { createRiskGuard, fingerprint, normalizeIp, classify };

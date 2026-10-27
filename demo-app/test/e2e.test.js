@@ -24,7 +24,7 @@ test.before(async () => {
   const enginePort = await freePort();
   const env = {
     SESSION_SECRET: 's3cret-for-tests', ENGINE_API_KEY: 'e2e-key', DEMO_USER: 'demo', DEMO_PASSWORD: 'pw-for-tests',
-    RISK_ENGINE_URL: `http://127.0.0.1:${enginePort}`, TRUST_PROXY: 'true', EXPOSE_SIGNALS: 'true',
+    RISK_ENGINE_URL: `http://127.0.0.1:${enginePort}`, TRUST_PROXY: 'true', EXPOSE_SIGNALS: 'true', REQUIRE_DEVICE_KEY: 'false',
   };
   engine = startEngine({ port: enginePort, stdio: 'ignore', env: { ENGINE_API_KEY: env.ENGINE_API_KEY, RISK_STATE: 'memory', SQLITE_PATH: path.join(tmp, 'e.db') } });
   await waitFor(`${env.RISK_ENGINE_URL}/health`);
