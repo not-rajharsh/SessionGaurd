@@ -111,8 +111,13 @@ def create_app(settings: Settings | None = None, store=None, geo: GeoDB | None =
         try:
             ex = explain_fn(signal_dicts, ctx)
         except Exception:  # noqa: BLE001
-            ex = Explanation(template_explanation(signal_dicts, ctx), "template")
-        events.set_rationale(event_id, ex.text, ex.source)
+            ex = Explanation(text=template_explanation(signal_dicts, ctx), source="template", provider="template", model="template", latency_ms=0)
+        # ex might be old style
+        provider = getattr(ex, 'provider', None) or getattr(ex, 'source', 'template')
+        model = getattr(ex, 'model', '') or ''
+        latency_ms = getattr(ex, 'latency_ms', 0) or 0
+        source = getattr(ex, 'source', provider)
+        events.set_rationale(event_id, ex.text, source, provider=provider, model=model, latency_ms=latency_ms)
 
     def _log_event(background: BackgroundTasks, c: Context, now: float, route: str, score: int,
                    action: str, signals: list[Signal], rationale: str | None = None) -> None:
@@ -123,9 +128,9 @@ def create_app(settings: Settings | None = None, store=None, geo: GeoDB | None =
             log.warning("ALERT session=%s score=%d signals=%s", session_ref(c.session_id), score,
                         [x.name for x in signals])
         if rationale is not None:
-            events.set_rationale(event_id, rationale, "template")
+            events.set_rationale(event_id, rationale, "template", provider="template", model="template", latency_ms=0)
         elif not any(x.weight > 0 for x in signals):
-            events.set_rationale(event_id, "No risk signals fired; the request matched the session baseline.", "template")
+            events.set_rationale(event_id, "No risk signals fired; the request matched the session baseline.", "template", provider="template", model="template", latency_ms=0)
         else:
             background.add_task(_explain_and_store, event_id, [x.to_dict() for x in signals],
                                 {"score": score, "action": action, "route": route})
