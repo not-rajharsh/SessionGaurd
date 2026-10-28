@@ -54,7 +54,8 @@ async function loadDetail() {
     const head = el('div'); head.append(el('strong', `${e.action.toUpperCase()} ${e.score}/100 `, cls(e.action)), el('span', `${fmt(e.ts)} ${e.route || ''} from ${e.ip}`, 'muted'));
     box.append(head, el('div', `User-Agent: ${e.user_agent}`, 'muted'));
     for (const s of e.signals) box.append(el('div', `${s.weight > 0 ? '+' : ''}${s.weight} ${s.name}: ${s.detail}`));
-    box.append(el('div', e.rationale ? `Rationale (${e.rationale_source}): ${e.rationale}` : 'Rationale: pending…', 'muted'));
+    const prov = e.provider || e.rationale_source || 'unknown';
+    box.append(el('div', e.rationale ? `Rationale (${prov}): ${e.rationale}` : 'Rationale: pending…', 'muted'));
     return box;
   }));
 }
