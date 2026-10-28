@@ -13,7 +13,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(ROOT / ".env")
+try:
+    load_dotenv(ROOT / ".env")
+except Exception:
+    pass
 
 
 @dataclass(frozen=True)
@@ -32,15 +35,22 @@ class Settings:
     # passkey step-up
     elevated_seconds: float = 300.0    # trust window after a passed step-up
     stepup_timeout: float = 60.0       # challenge not satisfied in time -> terminate
-    # LLM explanations (optional; the system works with provider "none")
-    llm_provider: str = "none"         # none | openai (any OpenAI-compatible API) | anthropic
+    # LLM explanations
+    llm_provider: str = "muse"         # muse (default) | ollama | openai_compatible | template
     llm_base_url: str = ""
     llm_model: str = ""
     llm_api_key: str = ""
-    llm_timeout: float = 4.0
+    llm_timeout: float = 5.0
+    llm_fallback_chain: str = ""
 
 
 def get_settings() -> Settings:
+    llm_provider = os.environ.get("LLM_PROVIDER", "muse").strip().lower()
+    # backward compat
+    if llm_provider == "openai":
+        llm_provider = "openai_compatible"
+    if llm_provider == "none":
+        llm_provider = "template"
     return Settings(
         engine_api_key=os.environ.get("ENGINE_API_KEY", ""),
         redis_url=os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0"),
@@ -56,9 +66,10 @@ def get_settings() -> Settings:
         nonce_ttl=float(os.environ.get("NONCE_TTL_SECONDS", "30")),
         elevated_seconds=float(os.environ.get("ELEVATED_SECONDS", "300")),
         stepup_timeout=float(os.environ.get("STEPUP_TIMEOUT_SECONDS", "60")),
-        llm_provider=os.environ.get("LLM_PROVIDER", "none").strip().lower(),
+        llm_provider=llm_provider,
         llm_base_url=os.environ.get("LLM_BASE_URL", ""),
         llm_model=os.environ.get("LLM_MODEL", ""),
         llm_api_key=os.environ.get("LLM_API_KEY", ""),
-        llm_timeout=float(os.environ.get("LLM_TIMEOUT_SECONDS", "4")),
+        llm_timeout=float(os.environ.get("LLM_TIMEOUT_SECONDS", "5")),
+        llm_fallback_chain=os.environ.get("LLM_FALLBACK_CHAIN", ""),
     )
