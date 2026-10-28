@@ -55,7 +55,8 @@ function printBlocked(events) {
   for (const e of events.filter((x) => x.action !== 'allow')) {
     line(`    ${e.action.toUpperCase()}  score ${e.score}/100  (${e.route})`);
     for (const s of e.signals.filter((x) => x.weight !== 0)) line(`      ${s.weight > 0 ? '+' : ''}${s.weight}  ${s.name}: ${s.detail}`);
-    line(`    rationale [${e.rationale_source}]: ${e.rationale}`);
+    const provider = e.provider || e.rationale_source || 'unknown';
+    line(`    rationale [${provider}]: ${e.rationale}`);
   }
 }
 
