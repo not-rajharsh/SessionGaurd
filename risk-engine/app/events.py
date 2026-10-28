@@ -27,12 +27,18 @@ CREATE TABLE IF NOT EXISTS events (
   signals TEXT NOT NULL,
   route TEXT NOT NULL DEFAULT '',
   rationale TEXT,
-  rationale_source TEXT
+  rationale_source TEXT,
+  provider TEXT,
+  model TEXT,
+  latency_ms INTEGER
 )"""
 _MIGRATIONS = {
     "route": "ALTER TABLE events ADD COLUMN route TEXT NOT NULL DEFAULT ''",
     "rationale": "ALTER TABLE events ADD COLUMN rationale TEXT",
     "rationale_source": "ALTER TABLE events ADD COLUMN rationale_source TEXT",
+    "provider": "ALTER TABLE events ADD COLUMN provider TEXT",
+    "model": "ALTER TABLE events ADD COLUMN model TEXT",
+    "latency_ms": "ALTER TABLE events ADD COLUMN latency_ms INTEGER",
 }
 
 
@@ -65,10 +71,14 @@ class EventLog:
             )
             return int(cur.lastrowid)
 
-    def set_rationale(self, event_id: int, text: str, source: str) -> None:
+    def set_rationale(self, event_id: int, text: str, source: str, provider: str = None, model: str = None, latency_ms: int = None) -> None:
         with self._conn() as c:
-            c.execute("UPDATE events SET rationale=?, rationale_source=? WHERE id=?",
-                      (text, source, event_id))
+            if provider is not None or model is not None or latency_ms is not None:
+                c.execute("UPDATE events SET rationale=?, rationale_source=?, provider=?, model=?, latency_ms=? WHERE id=?",
+                          (text, source, provider, model, latency_ms, event_id))
+            else:
+                c.execute("UPDATE events SET rationale=?, rationale_source=? WHERE id=?",
+                          (text, source, event_id))
 
     def get(self, event_id: int) -> dict | None:
         with self._conn() as c:
