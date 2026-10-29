@@ -119,71 +119,87 @@ def _post_json(url: str, headers: dict, body: dict, timeout: float) -> dict:
         return json.load(resp)
 
 
+DEFAULT_MUSE_BASE_URL = "https://api.meta.ai/v1"
+DEFAULT_MUSE_MODEL = "muse-spark-1.1"
+DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434/v1"
+DEFAULT_OLLAMA_MODEL = "llama3.1"
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_OPENAI_MODEL = "gpt-3.5-turbo"
+
+
 class BaseLLMProvider:
-    def __init__(self, name: str, base_url: str = "", model: str = "", api_key: str = "", timeout: float = 5.0):
+    def __init__(self, name: str, base_url: str = "", model: str = "", api_key: str = "",
+                 timeout: float = 5.0, max_tokens: int = 512, reasoning_effort: str = ""):
         self.name = name
         self.base_url = base_url
         self.model = model
         self.api_key = api_key
         self.timeout = timeout
+        self.max_tokens = max_tokens
+        self.reasoning_effort = reasoning_effort
+
+    def _chat(self, system: str, user: str, *, max_tokens: int | None = None,
+              reasoning_effort: str | None = None) -> str:
+        """OpenAI-style POST /chat/completions; returns the message text (possibly empty)."""
+        headers = {"authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        body = {
+            "model": self.model,
+            "max_tokens": self.max_tokens if max_tokens is None else max_tokens,
+            "temperature": 0,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        }
+        effort = self.reasoning_effort if reasoning_effort is None else reasoning_effort
+        if effort:
+            body["reasoning_effort"] = effort
+        data = _post_json(f"{self.base_url}/chat/completions", headers, body, self.timeout)
+        try:
+            content = data["choices"][0]["message"].get("content")
+        except (KeyError, IndexError, TypeError):
+            return ""
+        return content if isinstance(content, str) else ""
 
     def complete(self, system: str, user: str) -> str:
         raise NotImplementedError
 
 
 class MuseProvider(BaseLLMProvider):
-    def __init__(self, base_url: str = "", model: str = "", api_key: str = "", timeout: float = 5.0):
-        super().__init__("muse", base_url or "https://api.muse.dev/v1", model or "muse-default", api_key, timeout)
+    def __init__(self, base_url: str = "", model: str = "", api_key: str = "", timeout: float = 5.0,
+                 max_tokens: int = 512, reasoning_effort: str = ""):
+        super().__init__("muse", base_url or DEFAULT_MUSE_BASE_URL, model or DEFAULT_MUSE_MODEL,
+                         api_key, timeout, max_tokens, reasoning_effort)
 
     def complete(self, system: str, user: str) -> str:
-        headers = {"authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        data = _post_json(f"{self.base_url}/chat/completions", headers, {
-            "model": self.model, "max_tokens": 300, "temperature": 0,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        }, self.timeout)
-        return data["choices"][0]["message"]["content"]
+        text = self._chat(system, user)
+        if text.strip():
+            return text
+        # Reasoning models can spend the whole budget on hidden reasoning and return no text.
+        # Retry once with a larger budget and a minimal reasoning effort (both configurable).
+        return self._chat(system, user, max_tokens=max(self.max_tokens * 2, 1024),
+                          reasoning_effort=self.reasoning_effort or "minimal")
 
 
 class OllamaProvider(BaseLLMProvider):
-    def __init__(self, base_url: str = "", model: str = "", api_key: str = "", timeout: float = 5.0):
-        super().__init__("ollama", base_url or "http://localhost:11434/v1", model or "llama3.1", api_key, timeout)
+    def __init__(self, base_url: str = "", model: str = "", api_key: str = "", timeout: float = 5.0,
+                 max_tokens: int = 512, reasoning_effort: str = ""):
+        super().__init__("ollama", base_url or DEFAULT_OLLAMA_BASE_URL, model or DEFAULT_OLLAMA_MODEL,
+                         api_key, timeout, max_tokens, reasoning_effort)
 
     def complete(self, system: str, user: str) -> str:
-        headers = {"authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        data = _post_json(f"{self.base_url}/chat/completions", headers, {
-            "model": self.model, "max_tokens": 300, "temperature": 0,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        }, self.timeout)
-        return data["choices"][0]["message"]["content"]
+        return self._chat(system, user)
 
 
 class OpenAICompatibleProvider(BaseLLMProvider):
-    def __init__(self, base_url: str = "", model: str = "", api_key: str = "", timeout: float = 5.0):
-        super().__init__("openai_compatible", base_url or "https://api.openai.com/v1", model or "gpt-3.5-turbo", api_key, timeout)
+    def __init__(self, base_url: str = "", model: str = "", api_key: str = "", timeout: float = 5.0,
+                 max_tokens: int = 512, reasoning_effort: str = ""):
+        super().__init__("openai_compatible", base_url or DEFAULT_OPENAI_BASE_URL,
+                         model or DEFAULT_OPENAI_MODEL, api_key, timeout, max_tokens, reasoning_effort)
 
     def complete(self, system: str, user: str) -> str:
-        headers = {"authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        data = _post_json(f"{self.base_url}/chat/completions", headers, {
-            "model": self.model, "max_tokens": 300, "temperature": 0,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        }, self.timeout)
-        return data["choices"][0]["message"]["content"]
+        return self._chat(system, user)
 
 
 # Keep old names for backward compat
 OpenAICompatProvider = OpenAICompatibleProvider
-
-
-class AnthropicProvider(BaseLLMProvider):
-    def __init__(self, base_url: str = "", model: str = "", api_key: str = "", timeout: float = 5.0):
-        super().__init__("anthropic", base_url or "https://api.anthropic.com", model, api_key, timeout)
-
-    def complete(self, system: str, user: str) -> str:
-        data = _post_json(f"{self.base_url}/v1/messages",
-                          {"x-api-key": self.api_key, "anthropic-version": "2023-06-01"},
-                          {"model": self.model, "max_tokens": 300, "system": system,
-                           "messages": [{"role": "user", "content": user}]}, self.timeout)
-        return "".join(b.get("text", "") for b in data["content"] if b.get("type") == "text")
 
 
 class TemplateProvider(BaseLLMProvider):
@@ -200,14 +216,14 @@ def _get_provider_instance(name: str, settings: Settings) -> BaseLLMProvider | N
         if name == "template":
             return TemplateProvider()
         return None
+    common = (settings.llm_base_url, settings.llm_model, settings.llm_api_key, settings.llm_timeout,
+              settings.llm_max_tokens, settings.llm_reasoning_effort)
     if name == "muse":
-        return MuseProvider(settings.llm_base_url, settings.llm_model, settings.llm_api_key, settings.llm_timeout)
+        return MuseProvider(*common)
     if name == "ollama":
-        return OllamaProvider(settings.llm_base_url, settings.llm_model, settings.llm_api_key, settings.llm_timeout)
+        return OllamaProvider(*common)
     if name in ("openai_compatible", "openai", "openai-compatible"):
-        return OpenAICompatibleProvider(settings.llm_base_url, settings.llm_model, settings.llm_api_key, settings.llm_timeout)
-    if name == "anthropic":
-        return AnthropicProvider(settings.llm_base_url, settings.llm_model, settings.llm_api_key, settings.llm_timeout)
+        return OpenAICompatibleProvider(*common)
     log.warning("unknown LLM_PROVIDER=%r; using template explanations", name)
     return None
 
@@ -216,8 +232,8 @@ def get_provider(s: Settings) -> Provider | None:
     inst = _get_provider_instance(s.llm_provider, s)
     if isinstance(inst, TemplateProvider):
         return None
-    if inst is not None and not s.llm_model and s.llm_provider not in ("none", "", "template"):
-        # For backward compat with old tests
+    # openai_compatible has no safe default model: refuse it when unset.
+    if inst is not None and not s.llm_model and s.llm_provider in ("openai", "openai_compatible"):
         log.warning("LLM_PROVIDER=%s but LLM_MODEL is empty; using template explanations", s.llm_provider)
         return None
     return inst
@@ -230,16 +246,17 @@ def _clean_output(text: Any) -> str:
 
 
 def _run_with_timeout(provider: BaseLLMProvider, system: str, user: str, timeout: float) -> str:
-    # Use simple approach - just call with timeout from provider
-    import signal
-    # For compatibility in general environment, use threading-based timeout
+    # Thread-based timeout: do NOT block in shutdown, otherwise a slow provider
+    # would defeat the whole point of the fallback chain.
     import concurrent.futures
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-        fut = ex.submit(provider.complete, system, user)
-        try:
-            return fut.result(timeout=timeout)
-        except concurrent.futures.TimeoutError:
-            raise TimeoutError("LLM request timed out")
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    fut = ex.submit(provider.complete, system, user)
+    try:
+        return fut.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        raise TimeoutError("LLM request timed out") from None
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
 
 
 def explain(signals: list[dict], context: dict | None = None, *, provider: Any = None,
@@ -256,10 +273,7 @@ def explain(signals: list[dict], context: dict | None = None, *, provider: Any =
                 start = time.time()
                 try:
                     timeout = getattr(provider, 'timeout', s.llm_timeout)
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                        fut = ex.submit(provider.complete, SYSTEM_PROMPT, json.dumps(build_payload(signals, context)))
-                        raw = fut.result(timeout=timeout)
+                    raw = _run_with_timeout(provider, SYSTEM_PROMPT, json.dumps(build_payload(signals, context)), timeout)
                     text = _clean_output(raw)
                     if text:
                         latency_ms = int((time.time() - start) * 1000)
@@ -274,10 +288,7 @@ def explain(signals: list[dict], context: dict | None = None, *, provider: Any =
             start = time.time()
             try:
                 timeout = s.llm_timeout
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                    fut = ex.submit(provider.complete, SYSTEM_PROMPT, json.dumps(build_payload(signals, context)))
-                    raw = fut.result(timeout=timeout)
+                raw = _run_with_timeout(provider, SYSTEM_PROMPT, json.dumps(build_payload(signals, context)), timeout)
                 text = _clean_output(raw)
                 if text:
                     latency_ms = int((time.time() - start) * 1000)
@@ -311,20 +322,16 @@ def explain(signals: list[dict], context: dict | None = None, *, provider: Any =
         
         inst = _get_provider_instance(p_name, s)
         if inst is None or isinstance(inst, TemplateProvider):
-            text = template_explanation(signals, context)
-            return Explanation(text=text, provider="template", model="template", latency_ms=0, source="template")
+            continue  # unknown provider in the chain: try the next one
         
-        # Check if model missing for some providers - for backward compat with old behavior
-        if not getattr(s, 'llm_model', '') and p_lower in ("openai", "openai_compatible", "anthropic"):
+        # openai_compatible has no safe default model.
+        if not getattr(s, 'llm_model', '') and p_lower in ("openai", "openai_compatible"):
             continue  # try next
         
         start = time.time()
         try:
             timeout = getattr(s, 'llm_timeout', 5.0)
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                fut = ex.submit(inst.complete, SYSTEM_PROMPT, payload_user)
-                raw = fut.result(timeout=timeout)
+            raw = _run_with_timeout(inst, SYSTEM_PROMPT, payload_user, timeout)
             text = _clean_output(raw)
             if text:
                 latency_ms = int((time.time() - start) * 1000)

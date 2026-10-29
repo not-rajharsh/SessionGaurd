@@ -45,7 +45,7 @@ const adminLoginForm = (msg = '') => page('Admin login', `<h1>Admin</h1>${msg ? 
 <label>Password <input name="password" type="password"></label><br><button>Log in</button></form>`);
 
 const adminPage = () => page('Admin dashboard', `<h1>Risk dashboard</h1>
-<p class="muted">Auto-refreshes every 5 s. <form method="post" action="/admin/logout" style="display:inline"><button>Log out</button></form></p>
+<p class="muted">Auto-refreshes every 2 s. <form method="post" action="/admin/logout" style="display:inline"><button>Log out</button></form></p>
 <h2>Sessions</h2><table id="sessions"><thead><tr><th>Session</th><th>Status</th><th>Events</th><th>Last</th><th>Max score</th><th>Last action</th></tr></thead><tbody></tbody></table>
 <h2>Timeline <span id="selected" class="muted"></span></h2><div id="timeline"></div><div id="events"></div>
 ${scripts('/static/admin.js')}`);

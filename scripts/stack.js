@@ -19,7 +19,7 @@ async function startStack({ engineEnv = {}, appEnv = {} } = {}) {
     SESSION_SECRET: 's3cret-for-tests', ENGINE_API_KEY: 'stack-key', DEMO_USER: 'demo', DEMO_PASSWORD: 'pw-for-tests',
     ADMIN_USER: 'admin', ADMIN_PASSWORD: 'admin-pw-for-tests', RISK_ENGINE_URL: `http://127.0.0.1:${enginePort}`,
     EXPOSE_SIGNALS: 'true', APP_PORT: String(appPort), WEBAUTHN_ORIGINS: `http://localhost:${appPort}`,
-    PASSKEY_STORE_PATH: path.join(tmp, 'passkeys.json'), ...appEnv,
+    PASSKEY_STORE_PATH: path.join(tmp, 'passkeys.json'), ENGINE_TIMEOUT_MS: '10000', ...appEnv,
   };
   const engine = startEngine({ port: enginePort, stdio: 'ignore',
     env: { ENGINE_API_KEY: env.ENGINE_API_KEY, RISK_STATE: 'memory', SQLITE_PATH: path.join(tmp, 'e.db'), ...engineEnv } });

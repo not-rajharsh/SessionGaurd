@@ -46,13 +46,40 @@ and the demo's JSON passkey store (use a database in production).
   `true` is mapped to `loopback` with a warning. `npm run demo` sets `loopback` for its edge simulator
   (`scripts/netsim.js`), which stands in for a real proxy so one machine can fake different locations.
 - `EXPOSE_SIGNALS=true` is demo-only; set `false` in production.
-- `LLM_PROVIDER=none|openai|anthropic`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`, `LLM_TIMEOUT_SECONDS`.
-  `openai` means any OpenAI-compatible `/chat/completions` endpoint. With `none`, or on any error/timeout,
-  a deterministic template is used. User-agent and other request strings reach the model only as sanitized
-  `untrusted_data` fields of a JSON payload.
+- `LLM_PROVIDER=muse|ollama|openai_compatible|template`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`,
+  `LLM_TIMEOUT_SECONDS`, `LLM_MAX_TOKENS`, `LLM_REASONING_EFFORT`, `LLM_FALLBACK_CHAIN`. See
+  [LLM rationales](#llm-rationales) below.
 - Tunables: `PROOF_MAX_AGE_SECONDS` (30), `NONCE_TTL_SECONDS` (30), `ELEVATED_SECONDS` (300),
   `STEPUP_TIMEOUT_SECONDS` (60).
 - WebAuthn needs `localhost` or HTTPS; origins default to `http://localhost:$APP_PORT`.
+
+## LLM rationales
+
+Rationales are written asynchronously *after* the deterministic decision. They are for analysts only and
+can never change the action.
+
+Providers (all use the OpenAI-style `POST /chat/completions`):
+
+| `LLM_PROVIDER` | Default base URL | Default model | Notes |
+|---|---|---|---|
+| `muse` (default) | `https://api.meta.ai/v1` | `muse-spark-1.1` | Set `LLM_API_KEY`. If the reply text is empty, retries once with doubled `LLM_MAX_TOKENS` (at least 1024) and `reasoning_effort=minimal`. |
+| `ollama` | `http://localhost:11434/v1` | `llama3.1` | Local; no key needed. |
+| `openai_compatible` | `https://api.openai.com/v1` | none (required) | Any OpenAI-compatible endpoint; set `LLM_MODEL` and usually `LLM_BASE_URL`/`LLM_API_KEY`. |
+| `template` | — | — | No LLM; deterministic template only. |
+
+`LLM_BASE_URL` and `LLM_MODEL` override a provider's defaults. `LLM_MAX_TOKENS` (default 512) and
+`LLM_REASONING_EFFORT` (default blank; Muse's empty-reply retry uses `minimal`) are configurable too.
+
+**Fallback chain.** Set `LLM_FALLBACK_CHAIN` to a comma-separated list, e.g.
+`LLM_FALLBACK_CHAIN=muse,ollama,template`. Providers are tried in order; a timeout, HTTP error, empty
+reply or unknown provider moves on to the next. If none succeed, the deterministic template is used. With
+no chain configured, the engine tries `LLM_PROVIDER` and then the template.
+
+**Privacy.** Only sanitized, truncated signals are sent to the LLM: a small JSON document containing the
+already-made decision, the route, signal names/weights, and attacker-controlled strings confined to
+`untrusted_data` fields. Raw session ids, cookies, passwords, device keys and the full request never leave
+the engine. The model's output is treated as untrusted: cleaned, truncated, stored separately, and rendered
+as text (never HTML).
 
 ## Notes on Phase 1 tests
 All Phase 1 tests still pass. Two test *settings* changed because the defaults became secure: the Phase 1

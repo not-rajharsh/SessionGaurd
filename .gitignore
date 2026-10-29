@@ -1,6 +1,8 @@
 node_modules/
 .env
 data/
+!risk-engine/app/data/
+!risk-engine/app/data/geo_demo.json
 .venv/
 __pycache__/
 .pytest_cache/

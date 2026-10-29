@@ -31,6 +31,7 @@ function createApp({ store, adminStore = new session.MemoryStore(), env = proces
   }
   const guard = createRiskGuard({
     engineUrl: env.RISK_ENGINE_URL, apiKey: env.ENGINE_API_KEY, exposeSignals: env.EXPOSE_SIGNALS === 'true',
+    timeoutMs: Number(env.ENGINE_TIMEOUT_MS || 1500),
   });
   const engine = guard.engine;
   const passkeys = createPasskeyStore(env.PASSKEY_STORE_PATH || path.join(ROOT, 'data', 'passkeys.json'));

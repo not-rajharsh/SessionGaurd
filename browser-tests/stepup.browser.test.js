@@ -1,6 +1,6 @@
 'use strict';
 // C4: passkey step-up tested end to end in Chromium with a CDP VIRTUAL authenticator (no hardware).
-// The engine runs with a 2 s presence window so a short pause makes the device proof stale and the
+// The engine runs with a 10 s presence window so a short pause makes the device proof stale and the
 // next page load is challenged for real. Needs Chromium (npm run setup, or set PW_CHROMIUM_PATH).
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -11,7 +11,7 @@ const { registerPasskey, loadAuthenticatorCredential } = require('../scripts/reg
 
 let stack, browser, authFile;
 test.before(async () => {
-  stack = await startStack({ engineEnv: { PROOF_MAX_AGE_SECONDS: '2' } });
+  stack = await startStack({ engineEnv: { PROOF_MAX_AGE_SECONDS: '10' } });
   authFile = path.join(stack.tmp, 'authenticator.json');
   await registerPasskey({ baseUrl: stack.base, user: 'demo', password: stack.env.DEMO_PASSWORD, authFile, storeFile: stack.env.PASSKEY_STORE_PATH });
   browser = await launchBrowser();
@@ -39,7 +39,7 @@ async function events() {
 
 test('legit user with the registered passkey: challenged, step-up passes, elevated window applies', { timeout: 90000 }, async () => {
   const { ctx, page } = await loginPage({ withPasskey: true });
-  await page.waitForTimeout(3000); // device proof is now older than the 2 s window
+  await page.waitForTimeout(11000); // device proof is now older than the 10 s window
   await page.goto(`${stack.base}/dashboard`); // challenged -> step-up page -> real WebAuthn assertion -> back to dashboard
   await page.waitForSelector('h1:has-text("Welcome, demo")', { timeout: 30000 });
   const names = (await events()).flatMap((e) => e.signals.map((s) => s.name));
@@ -52,7 +52,7 @@ test('legit user with the registered passkey: challenged, step-up passes, elevat
 
 test('without the victim\'s passkey: step-up fails and the session is terminated', { timeout: 90000 }, async () => {
   const { ctx, page } = await loginPage({ withPasskey: false });
-  await page.waitForTimeout(3000);
+  await page.waitForTimeout(11000);
   await page.goto(`${stack.base}/dashboard`);
   await page.waitForSelector('#status[data-state="failed"]', { timeout: 40000 });
   assert.equal(await page.getAttribute('#status', 'data-reason'), 'NotAllowedError');

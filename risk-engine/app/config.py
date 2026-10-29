@@ -41,6 +41,8 @@ class Settings:
     llm_model: str = ""
     llm_api_key: str = ""
     llm_timeout: float = 5.0
+    llm_max_tokens: int = 512
+    llm_reasoning_effort: str = ""     # e.g. "minimal"; Muse also retries with "minimal" if the reply is empty
     llm_fallback_chain: str = ""
 
 
@@ -71,5 +73,7 @@ def get_settings() -> Settings:
         llm_model=os.environ.get("LLM_MODEL", ""),
         llm_api_key=os.environ.get("LLM_API_KEY", ""),
         llm_timeout=float(os.environ.get("LLM_TIMEOUT_SECONDS", "5")),
+        llm_max_tokens=int(os.environ.get("LLM_MAX_TOKENS", "512")),
+        llm_reasoning_effort=os.environ.get("LLM_REASONING_EFFORT", "").strip(),
         llm_fallback_chain=os.environ.get("LLM_FALLBACK_CHAIN", ""),
     )

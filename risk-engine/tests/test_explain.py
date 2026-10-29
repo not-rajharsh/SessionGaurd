@@ -1,5 +1,6 @@
 """Tests for explain: template fallback, provider failures, timeouts, and prompt-injection safety."""
 import json
+import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -7,8 +8,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from app.config import Settings
-from app.explain import (SYSTEM_PROMPT, OpenAICompatProvider, build_payload, explain, get_provider,
-                         sanitize, template_explanation)
+from app.explain import (SYSTEM_PROMPT, MuseProvider, OllamaProvider, OpenAICompatProvider,
+                         build_payload, explain, get_provider, sanitize, template_explanation)
 from conftest import DELHI, FP_A, NYC, UA_A, DeviceKey, evaluate, login_bound
 
 SIGNALS = [
@@ -23,8 +24,8 @@ CTX = {"score": 100, "action": "terminate", "route": "POST /transfer"}
 class FakeLLM:
     """Local OpenAI-compatible server. mode: ok | slow | error."""
 
-    def __init__(self, mode="ok"):
-        self.mode, self.requests = mode, []
+    def __init__(self, mode="ok", contents=None):
+        self.mode, self.contents, self.requests = mode, contents, []
         outer = self
 
         class H(BaseHTTPRequestHandler):
@@ -36,7 +37,12 @@ class FakeLLM:
                     time.sleep(2)
                 if outer.mode == "error":
                     self.send_response(500); self.end_headers(); return
-                out = json.dumps({"choices": [{"message": {"content": "LLM says: travel was impossible."}}]}).encode()
+                if outer.contents is not None:
+                    i = min(len(outer.requests) - 1, len(outer.contents) - 1)
+                    content = outer.contents[i]
+                else:
+                    content = "LLM says: travel was impossible."
+                out = json.dumps({"choices": [{"message": {"content": content}}]}).encode()
                 self.send_response(200); self.send_header("content-type", "application/json"); self.end_headers()
                 try:
                     self.wfile.write(out)
@@ -58,8 +64,8 @@ class FakeLLM:
 def llm():
     made = []
 
-    def _make(mode="ok"):
-        f = FakeLLM(mode); made.append(f); return f
+    def _make(mode="ok", contents=None):
+        f = FakeLLM(mode, contents); made.append(f); return f
     yield _make
     for f in made:
         f.close()
@@ -101,6 +107,67 @@ def test_openai_compatible_provider_roundtrip(llm):
     req = f.requests[0]
     assert req["path"] == "/v1/chat/completions" and req["auth"] == "Bearer sk-test"
     assert req["body"]["model"] == "test-model"
+
+
+def test_muse_defaults_are_meta_spark():
+    p = MuseProvider()
+    assert p.base_url == "https://api.meta.ai/v1"
+    assert p.model == "muse-spark-1.1"
+
+
+def test_muse_adapter_retries_empty_reply_with_more_tokens_and_minimal_reasoning(llm):
+    f = llm("ok", contents=["", "Muse says: travel was impossible."])
+    p = MuseProvider(f.url, api_key="sk-muse", max_tokens=256)
+    ex = explain(SIGNALS, CTX, provider=p)
+    assert (ex.source, ex.provider, ex.text) == ("llm", "muse", "Muse says: travel was impossible.")
+
+    first, second = f.requests
+    assert first["path"] == "/v1/chat/completions" and first["auth"] == "Bearer sk-muse"
+    assert first["body"]["model"] == "muse-spark-1.1"
+    assert first["body"]["max_tokens"] == 256
+    assert "reasoning_effort" not in first["body"]
+    assert second["body"]["max_tokens"] >= 1024
+    assert second["body"]["reasoning_effort"] == "minimal"
+
+
+def test_muse_reasoning_effort_is_configurable(llm):
+    f = llm("ok", contents=["", "ok"])
+    p = MuseProvider(f.url, max_tokens=100, reasoning_effort="low")
+    assert explain(SIGNALS, CTX, provider=p).source == "llm"
+    assert [r["body"]["reasoning_effort"] for r in f.requests] == ["low", "low"]
+
+
+def test_ollama_adapter_roundtrip(llm):
+    f = llm("ok", contents=["Ollama says: travel was impossible."])
+    p = OllamaProvider(f.url, max_tokens=128)
+    ex = explain(SIGNALS, CTX, provider=p)
+    assert (ex.source, ex.provider, ex.text) == ("llm", "ollama", "Ollama says: travel was impossible.")
+    req = f.requests[0]
+    assert req["path"] == "/v1/chat/completions"
+    assert req["auth"] is None
+    assert req["body"]["model"] == "llama3.1" and req["body"]["max_tokens"] == 128
+
+
+def test_fallback_chain_skips_timed_out_provider_and_uses_next(llm, monkeypatch):
+    slow = llm("slow")
+    fast = llm("ok", contents=["second provider answered"])
+    p_slow = OpenAICompatProvider(slow.url, "m", "k", timeout=0.3)
+    p_slow.name = "slow"
+    p_fast = OpenAICompatProvider(fast.url, "m", "k", timeout=1.0)
+    p_fast.name = "fast"
+
+    import app.explain as explain_mod
+    monkeypatch.setattr(explain_mod, "_get_provider_instance",
+                        lambda name, settings: {"slow": p_slow, "fast": p_fast}.get(name))
+
+    s = Settings(engine_api_key="k", redis_url="", risk_state="memory", sqlite_path="",
+                 state_ttl_seconds=60, max_travel_kmh=900, min_travel_km=100, geo_path="",
+                 llm_provider="slow", llm_fallback_chain="slow,fast", llm_timeout=0.3)
+    t0 = time.time()
+    ex = explain(SIGNALS, CTX, settings=s)
+    assert (ex.source, ex.provider, ex.text) == ("llm", "fast", "second provider answered")
+    assert len(slow.requests) == 1 and len(fast.requests) == 1
+    assert time.time() - t0 < 1.5
 
 
 def test_slow_llm_times_out_quickly_and_falls_back(llm):
@@ -191,3 +258,11 @@ def test_rationale_is_stored_asynchronously_with_its_source(l2, events):
     evaluate(l2, ip=NYC, ua="Other", kind="write", route="POST /transfer")
     row = next(r for r in events.recent() if r["route"] == "POST /transfer")
     assert row["rationale_source"] == "template" and "terminated" in row["rationale"]
+
+
+@pytest.mark.skipif(not os.environ.get("LLM_API_KEY"), reason="set LLM_API_KEY to run the real-LLM smoke test")
+def test_real_llm_smoke():
+    from app.config import get_settings
+    ex = explain(SIGNALS, CTX, settings=get_settings())
+    assert ex.source == "llm" and ex.text.strip()
+    assert ex.provider != "template"
